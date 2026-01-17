@@ -136,7 +136,7 @@ impl eframe::App for App {
                                                 .add_sized(
                                                     [28.0, 28.0],
                                                     egui::Button::new(
-                                                        egui::RichText::new("x")
+                                                        egui::RichText::new("×")
                                                             .color(egui::Color32::LIGHT_RED),
                                                     ),
                                                 )
