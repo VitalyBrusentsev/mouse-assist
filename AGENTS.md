@@ -38,7 +38,7 @@
 
 ## Security & Configuration
 
-- `command.argv` actions execute programs directly; treat `config.toml` as trusted input.
+- `command.argv` actions execute programs directly (no shell); treat `config.toml` as trusted input.
 - X11 backend (Mint Cinnamon): uses XInput2 + XTest; no `/dev/input` or `/dev/uinput` permissions, but still has “can synthesize input” implications.
 - Wayland: global key injection is restricted; evdev/uinput typically needs udev rules/groups (`/dev/input/event*`, `/dev/uinput`).
 

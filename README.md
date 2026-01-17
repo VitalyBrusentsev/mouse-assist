@@ -27,6 +27,16 @@ cargo run -p mouse-assist-daemon -- run
 On X11 sessions (`XDG_SESSION_TYPE=x11`, e.g., Linux Mint Cinnamon), this uses an X11 backend (no `/dev/input` or `/dev/uinput` permissions needed).
 On Wayland sessions, the daemon falls back to the evdev/uinput approach, which typically requires udev/group setup.
 
+## Config
+
+Bindings support `key_combo` and `command` actions. `command.argv` is executed as-is (no shell), so treat `config.toml` as trusted input.
+
+```toml
+[[bindings]]
+button = "BTN_TASK"
+action = { type = "command", argv = ["notify-send", "mouse-assist", "hello"] }
+```
+
 ### Prevent browser back/forward (X11)
 
 Browsers often handle mouse side buttons (X11 buttons 8/9) as Back/Forward. If you bind those

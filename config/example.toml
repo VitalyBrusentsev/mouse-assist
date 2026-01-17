@@ -7,7 +7,7 @@
 # Wayland sessions: if `device_by_path` is unset, the daemon listens on all `/dev/input/event*`
 # devices that can emit any of the configured `button` codes.
 #
-# Note: `command.argv` is executed as-is; treat config as trusted input.
+# Note: `action = { type = "command", argv = [...] }` is executed as-is (no shell); treat config as trusted input.
 
 # device_by_path = "/dev/input/by-id/usb-...-event-mouse"
 
@@ -26,3 +26,7 @@ action = { type = "key_combo", keys = ["KEY_VOLUMEUP"] }
 [[bindings]]
 button = "BTN_BACK"
 action = { type = "key_combo", keys = ["KEY_VOLUMEDOWN"] }
+
+[[bindings]]
+button = "BTN_TASK"
+action = { type = "command", argv = ["notify-send", "mouse-assist", "BTN_TASK pressed"] }
