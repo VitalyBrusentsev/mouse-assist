@@ -82,6 +82,8 @@ impl eframe::App for App {
                                     MouseButton::BtnForward,
                                     MouseButton::BtnBack,
                                     MouseButton::BtnTask,
+                                    MouseButton::WheelTiltLeft,
+                                    MouseButton::WheelTiltRight,
                                 ] {
                                     ui.selectable_value(&mut binding.button, b, format!("{:?}", b));
                                 }

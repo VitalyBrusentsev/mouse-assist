@@ -78,19 +78,22 @@ pub enum MouseButton {
     BtnForward,
     BtnBack,
     BtnTask,
+    WheelTiltLeft,
+    WheelTiltRight,
 }
 
 impl MouseButton {
-    pub fn linux_input_code(self) -> u16 {
+    pub fn linux_key_code(self) -> Option<u16> {
         match self {
-            Self::BtnLeft => 0x110,
-            Self::BtnRight => 0x111,
-            Self::BtnMiddle => 0x112,
-            Self::BtnSide => 0x113,
-            Self::BtnExtra => 0x114,
-            Self::BtnForward => 0x115,
-            Self::BtnBack => 0x116,
-            Self::BtnTask => 0x117,
+            Self::BtnLeft => Some(0x110),
+            Self::BtnRight => Some(0x111),
+            Self::BtnMiddle => Some(0x112),
+            Self::BtnSide => Some(0x113),
+            Self::BtnExtra => Some(0x114),
+            Self::BtnForward => Some(0x115),
+            Self::BtnBack => Some(0x116),
+            Self::BtnTask => Some(0x117),
+            Self::WheelTiltLeft | Self::WheelTiltRight => None,
         }
     }
 
@@ -102,6 +105,8 @@ impl MouseButton {
             Self::BtnSide | Self::BtnBack => Some(8),
             Self::BtnExtra | Self::BtnForward => Some(9),
             Self::BtnTask => None,
+            Self::WheelTiltLeft => Some(6),
+            Self::WheelTiltRight => Some(7),
         }
     }
 }

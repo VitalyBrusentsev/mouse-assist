@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
-use mouse_assist_core::{default_config_path, load_config, save_config, Action, Config};
+use mouse_assist_core::{
+    default_config_path, load_config, save_config, Action, Config, MouseButton,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -161,8 +163,19 @@ fn run_device(device_path: &Path, config: &Config) -> Result<(), AppError> {
                     if let Some(binding) = config
                         .bindings
                         .iter()
-                        .find(|b| b.button.linux_input_code() == code)
+                        .find(|b| b.button.linux_key_code() == Some(code))
                     {
+                        executor.execute_action(&binding.action);
+                    }
+                }
+            }
+            if let evdev::EventSummary::RelativeAxis(_event, axis, value) = ev.destructure() {
+                if let Some(tilt) = wheel_tilt_from_relative_axis(axis, value) {
+                    let button = match tilt {
+                        WheelTilt::Left => MouseButton::WheelTiltLeft,
+                        WheelTilt::Right => MouseButton::WheelTiltRight,
+                    };
+                    if let Some(binding) = config.bindings.iter().find(|b| b.button == button) {
                         executor.execute_action(&binding.action);
                     }
                 }
@@ -172,16 +185,29 @@ fn run_device(device_path: &Path, config: &Config) -> Result<(), AppError> {
 }
 
 fn run_all_devices(config: &Config) -> Result<(), AppError> {
-    let binding_codes: Vec<evdev::KeyCode> = config
+    let key_binding_codes: Vec<evdev::KeyCode> = config
         .bindings
         .iter()
-        .map(|b| evdev::KeyCode::new(b.button.linux_input_code()))
+        .filter_map(|b| b.button.linux_key_code().map(evdev::KeyCode::new))
         .collect();
+    let wants_wheel_tilt = config.bindings.iter().any(|b| {
+        matches!(
+            b.button,
+            MouseButton::WheelTiltLeft | MouseButton::WheelTiltRight
+        )
+    });
 
     let mut devices: Vec<(PathBuf, evdev::Device)> = evdev::enumerate()
         .filter_map(|(path, dev)| {
-            let keys = dev.supported_keys()?;
-            if !binding_codes.iter().any(|c| keys.contains(*c)) {
+            let keys_match = dev.supported_keys().map_or(false, |keys| {
+                key_binding_codes.iter().any(|c| keys.contains(*c))
+            });
+            let rel_match = wants_wheel_tilt
+                && dev.supported_relative_axes().map_or(false, |axes| {
+                    axes.contains(evdev::RelativeAxisCode::REL_HWHEEL)
+                        || axes.contains(evdev::RelativeAxisCode::REL_HWHEEL_HI_RES)
+                });
+            if !keys_match && !rel_match {
                 return None;
             }
             if let Err(err) = dev.set_nonblocking(true) {
@@ -229,7 +255,23 @@ fn run_all_devices(config: &Config) -> Result<(), AppError> {
                                     if let Some(binding) = config
                                         .bindings
                                         .iter()
-                                        .find(|b| b.button.linux_input_code() == code)
+                                        .find(|b| b.button.linux_key_code() == Some(code))
+                                    {
+                                        executor.execute_action(&binding.action);
+                                    }
+                                }
+                            }
+                            if let evdev::EventSummary::RelativeAxis(_event, axis, value) =
+                                ev.destructure()
+                            {
+                                if let Some(tilt) = wheel_tilt_from_relative_axis(axis, value) {
+                                    saw_any = true;
+                                    let button = match tilt {
+                                        WheelTilt::Left => MouseButton::WheelTiltLeft,
+                                        WheelTilt::Right => MouseButton::WheelTiltRight,
+                                    };
+                                    if let Some(binding) =
+                                        config.bindings.iter().find(|b| b.button == button)
                                     {
                                         executor.execute_action(&binding.action);
                                     }
@@ -291,6 +333,29 @@ fn run_x11(config: &Config) -> Result<(), AppError> {
             Event::XinputRawButtonPress(ev) => executor.on_button_press(ev.detail),
             _ => {}
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WheelTilt {
+    Left,
+    Right,
+}
+
+fn wheel_tilt_from_relative_axis(axis: evdev::RelativeAxisCode, value: i32) -> Option<WheelTilt> {
+    if !matches!(
+        axis,
+        evdev::RelativeAxisCode::REL_HWHEEL | evdev::RelativeAxisCode::REL_HWHEEL_HI_RES
+    ) {
+        return None;
+    }
+
+    if value < 0 {
+        Some(WheelTilt::Left)
+    } else if value > 0 {
+        Some(WheelTilt::Right)
+    } else {
+        None
     }
 }
 
