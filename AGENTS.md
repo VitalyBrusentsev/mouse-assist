@@ -18,6 +18,7 @@
 - `cargo run -p mouse-assist-daemon -- write-default-config`: create a default config at the standard XDG location.
 - `cargo run -p mouse-assist-daemon -- run`: run the daemon against all matching devices.
 - `cargo run -p mouse-assist-daemon -- run --device /dev/input/eventX`: restrict to one device node.
+- `cargo run -p mouse-assist-daemon -- run --grab`: on X11, grab configured buttons (6-9) so apps don't receive them (prevents browser back/forward double-actions).
 - `cargo run -p mouse-assist-config-app`: run the GUI config editor.
 
 ## Coding Style & Naming Conventions
@@ -44,6 +45,7 @@
 ## Agent Notes
 
 - Keep the TOML config stable/backwards-compatible; avoid hard DE dependencies.
+- Wheel tilt is supported via `WHEEL_TILT_LEFT` / `WHEEL_TILT_RIGHT` in `bindings.button` (X11 buttons 6/7; evdev `REL_HWHEEL*`).
 
 ## Promising Future Improvements
 

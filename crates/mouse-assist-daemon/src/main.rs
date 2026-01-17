@@ -44,6 +44,14 @@ enum Command {
         /// Path to a config.toml (defaults to the standard config location).
         #[arg(long)]
         config: Option<PathBuf>,
+        /// On X11: grab configured mouse buttons so applications won't receive them.
+        ///
+        /// This is useful to prevent browsers from handling back/forward side buttons (8/9),
+        /// avoiding "double actions" when you bind those buttons to something else.
+        ///
+        /// For safety, this only grabs X11 buttons 6-9 (horizontal wheel + side buttons).
+        #[arg(long)]
+        grab: bool,
     },
 }
 
@@ -84,7 +92,11 @@ fn main() -> Result<(), AppError> {
         Command::ListDevices => {
             list_devices()?;
         }
-        Command::Run { device, config } => {
+        Command::Run {
+            device,
+            config,
+            grab,
+        } => {
             let config_path = config.unwrap_or(default_config_path()?);
             let config = if config_path.exists() {
                 load_config(&config_path)?
@@ -102,7 +114,7 @@ fn main() -> Result<(), AppError> {
             {
                 run_device(&device_path, &config)?;
             } else if is_x11_session() {
-                run_x11(&config)?;
+                run_x11(&config, grab)?;
             } else {
                 run_all_devices(&config)?;
             }
@@ -310,30 +322,79 @@ fn run_all_devices(config: &Config) -> Result<(), AppError> {
     }
 }
 
-fn run_x11(config: &Config) -> Result<(), AppError> {
+fn run_x11(config: &Config, grab: bool) -> Result<(), AppError> {
     let (conn, screen_num) = x11rb::connect(None)?;
     let root = conn.setup().roots[screen_num].root;
 
-    conn.xinput_xi_query_version(2, 0)?.reply()?;
     conn.xtest_get_version(2, 2)?.reply()?;
 
-    conn.xinput_xi_select_events(
-        root,
-        &[xinput::EventMask {
-            deviceid: 0,
-            mask: vec![xinput::XIEventMask::RAW_BUTTON_PRESS],
-        }],
-    )?;
-    conn.flush()?;
+    if grab {
+        grab_x11_buttons(&conn, root, config)?;
+    } else {
+        conn.xinput_xi_query_version(2, 0)?.reply()?;
+        conn.xinput_xi_select_events(
+            root,
+            &[xinput::EventMask {
+                deviceid: 0,
+                mask: vec![xinput::XIEventMask::RAW_BUTTON_PRESS],
+            }],
+        )?;
+        conn.flush()?;
+    }
 
     let mut executor = X11Executor::new(conn, root, config)?;
 
     loop {
         match executor.conn.wait_for_event()? {
-            Event::XinputRawButtonPress(ev) => executor.on_button_press(ev.detail),
+            Event::ButtonPress(ev) if grab => executor.on_button_press(u32::from(ev.detail)),
+            Event::XinputRawButtonPress(ev) if !grab => executor.on_button_press(ev.detail),
             _ => {}
         }
     }
+}
+
+fn grab_x11_buttons(
+    conn: &x11rb::rust_connection::RustConnection,
+    root: xproto::Window,
+    config: &Config,
+) -> Result<(), AppError> {
+    use x11rb::protocol::xproto::ConnectionExt as _;
+
+    let mut buttons: Vec<u8> = config
+        .bindings
+        .iter()
+        .filter_map(|b| b.button.x11_button_number())
+        .filter(|&n| (6..=9).contains(&n))
+        .map(|n| n as u8)
+        .collect();
+    buttons.sort_unstable();
+    buttons.dedup();
+
+    if buttons.is_empty() {
+        warn!("--grab enabled, but no grab-eligible X11 buttons (6-9) are configured");
+        return Ok(());
+    }
+
+    for button in buttons {
+        let cookie = conn.grab_button(
+            false,
+            root,
+            xproto::EventMask::BUTTON_PRESS,
+            xproto::GrabMode::ASYNC,
+            xproto::GrabMode::ASYNC,
+            x11rb::NONE,
+            x11rb::NONE,
+            button.into(),
+            xproto::ModMask::ANY,
+        )?;
+        if let Err(err) = cookie.check() {
+            warn!("failed to grab X11 button {button}: {err}");
+        }
+    }
+
+    conn.flush()?;
+    info!("grabbed X11 button(s) to suppress default actions");
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
