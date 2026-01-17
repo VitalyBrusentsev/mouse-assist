@@ -93,6 +93,17 @@ impl MouseButton {
             Self::BtnTask => 0x117,
         }
     }
+
+    pub fn x11_button_number(self) -> Option<u32> {
+        match self {
+            Self::BtnLeft => Some(1),
+            Self::BtnMiddle => Some(2),
+            Self::BtnRight => Some(3),
+            Self::BtnSide | Self::BtnBack => Some(8),
+            Self::BtnExtra | Self::BtnForward => Some(9),
+            Self::BtnTask => None,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

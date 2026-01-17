@@ -19,7 +19,10 @@ cargo run -p mouse-assist-daemon -- write-default-config
 cargo run -p mouse-assist-config-app
 ```
 
-3) Run the daemon (requires permission to read `/dev/input/event*` and to inject keys via `/dev/uinput`):
+3) Run the daemon:
 ```bash
 cargo run -p mouse-assist-daemon -- run
 ```
+
+On X11 sessions (`XDG_SESSION_TYPE=x11`, e.g., Linux Mint Cinnamon), this uses an X11 backend (no `/dev/input` or `/dev/uinput` permissions needed).
+On Wayland sessions, the daemon falls back to the evdev/uinput approach, which typically requires udev/group setup.

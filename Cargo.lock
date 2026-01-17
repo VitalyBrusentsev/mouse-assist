@@ -1961,6 +1961,8 @@ dependencies = [
  "thiserror 2.0.17",
  "tracing",
  "tracing-subscriber",
+ "x11-dl",
+ "x11rb",
 ]
 
 [[package]]

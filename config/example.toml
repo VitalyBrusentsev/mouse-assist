@@ -3,8 +3,9 @@
 # Copy to the default location printed by:
 #   mouse-assist-daemon config-path
 #
-# If `device_by_path` is unset, the daemon listens on all `/dev/input/event*` devices
-# that can emit any of the configured `button` codes.
+# X11 sessions: the daemon listens globally for matching mouse buttons.
+# Wayland sessions: if `device_by_path` is unset, the daemon listens on all `/dev/input/event*`
+# devices that can emit any of the configured `button` codes.
 #
 # Note: `command.argv` is executed as-is; treat config as trusted input.
 

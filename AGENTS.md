@@ -38,8 +38,8 @@
 ## Security & Configuration
 
 - `command.argv` actions execute programs directly; treat `config.toml` as trusted input.
-- Access to `/dev/input/event*` and `/dev/uinput` usually needs udev rules/groups.
-- Wayland vs X11: avoid DE-specific “key simulation” APIs; prefer kernel-level uinput injection so behavior is consistent across compositors and X11.
+- X11 backend (Mint Cinnamon): uses XInput2 + XTest; no `/dev/input` or `/dev/uinput` permissions, but still has “can synthesize input” implications.
+- Wayland: global key injection is restricted; evdev/uinput typically needs udev rules/groups (`/dev/input/event*`, `/dev/uinput`).
 
 ## Agent Notes
 

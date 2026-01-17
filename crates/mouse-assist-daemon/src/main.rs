@@ -5,6 +5,11 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 use tracing::{error, info, warn};
+use x11rb::connection::Connection as _;
+use x11rb::protocol::{xinput, xproto, Event};
+use x11rb::protocol::{
+    xinput::ConnectionExt as _, xproto::ConnectionExt as _, xtest::ConnectionExt as _,
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "mouse-assist-daemon")]
@@ -46,6 +51,12 @@ enum AppError {
     Config(#[from] mouse_assist_core::ConfigError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("x11 connect error: {0}")]
+    X11Connect(#[from] x11rb::errors::ConnectError),
+    #[error("x11 connection error: {0}")]
+    X11Connection(#[from] x11rb::errors::ConnectionError),
+    #[error("x11 reply error: {0}")]
+    X11Reply(#[from] x11rb::errors::ReplyError),
 }
 
 fn main() -> Result<(), AppError> {
@@ -88,6 +99,8 @@ fn main() -> Result<(), AppError> {
                 device.or_else(|| config.device_by_path.as_ref().map(PathBuf::from))
             {
                 run_device(&device_path, &config)?;
+            } else if is_x11_session() {
+                run_x11(&config)?;
             } else {
                 run_all_devices(&config)?;
             }
@@ -95,6 +108,15 @@ fn main() -> Result<(), AppError> {
     }
 
     Ok(())
+}
+
+fn is_x11_session() -> bool {
+    match std::env::var("XDG_SESSION_TYPE") {
+        Ok(t) if t == "x11" => return true,
+        Ok(t) if t == "wayland" => return false,
+        _ => {}
+    }
+    std::env::var_os("DISPLAY").is_some() && std::env::var_os("WAYLAND_DISPLAY").is_none()
 }
 
 fn list_devices() -> Result<(), AppError> {
@@ -246,6 +268,32 @@ fn run_all_devices(config: &Config) -> Result<(), AppError> {
     }
 }
 
+fn run_x11(config: &Config) -> Result<(), AppError> {
+    let (conn, screen_num) = x11rb::connect(None)?;
+    let root = conn.setup().roots[screen_num].root;
+
+    conn.xinput_xi_query_version(2, 0)?.reply()?;
+    conn.xtest_get_version(2, 2)?.reply()?;
+
+    conn.xinput_xi_select_events(
+        root,
+        &[xinput::EventMask {
+            deviceid: 0,
+            mask: vec![xinput::XIEventMask::RAW_BUTTON_PRESS],
+        }],
+    )?;
+    conn.flush()?;
+
+    let mut executor = X11Executor::new(conn, root, config)?;
+
+    loop {
+        match executor.conn.wait_for_event()? {
+            Event::XinputRawButtonPress(ev) => executor.on_button_press(ev.detail),
+            _ => {}
+        }
+    }
+}
+
 struct ActionExecutor {
     keyboard: Option<evdev::uinput::VirtualDevice>,
 }
@@ -360,4 +408,246 @@ fn collect_uinput_keys(config: &Config) -> evdev::AttributeSet<evdev::KeyCode> {
     keys.sort_by_key(|k| k.code());
     keys.dedup_by_key(|k| k.code());
     evdev::AttributeSet::from_iter(keys)
+}
+
+struct X11Executor {
+    conn: x11rb::rust_connection::RustConnection,
+    root: xproto::Window,
+    keysym_to_keycode: std::collections::HashMap<xproto::Keysym, xproto::Keycode>,
+    bindings_by_button: std::collections::HashMap<u32, Action>,
+}
+
+impl X11Executor {
+    fn new(
+        conn: x11rb::rust_connection::RustConnection,
+        root: xproto::Window,
+        config: &Config,
+    ) -> Result<Self, AppError> {
+        let keysym_to_keycode = build_x11_keysym_map(&conn)?;
+        let bindings_by_button = config
+            .bindings
+            .iter()
+            .filter_map(|b| Some((b.button.x11_button_number()?, b.action.clone())))
+            .collect();
+
+        Ok(Self {
+            conn,
+            root,
+            keysym_to_keycode,
+            bindings_by_button,
+        })
+    }
+
+    fn on_button_press(&mut self, button_detail: u32) {
+        let action = self.bindings_by_button.get(&button_detail).cloned();
+        if let Some(action) = action {
+            self.execute_action(&action);
+        }
+    }
+
+    fn execute_action(&mut self, action: &Action) {
+        match action {
+            Action::Command { argv } => self.execute_command(argv),
+            Action::KeyCombo { keys } => self.execute_key_combo(keys),
+        }
+    }
+
+    fn execute_command(&self, argv: &[String]) {
+        if argv.is_empty() {
+            warn!("ignoring empty command argv");
+            return;
+        }
+        let mut cmd = std::process::Command::new(&argv[0]);
+        if argv.len() > 1 {
+            cmd.args(&argv[1..]);
+        }
+        match cmd.spawn() {
+            Ok(_) => info!("executed command: {:?}", argv),
+            Err(err) => error!("failed to execute {:?}: {}", argv, err),
+        }
+    }
+
+    fn execute_key_combo(&mut self, keys: &[String]) {
+        if keys == ["KEY_BACK"] {
+            if self.inject_key_by_keysym(x11_dl::keysym::XF86XK_Back as u32) {
+                return;
+            }
+            self.inject_keysym_combo(&[
+                x11_dl::keysym::XK_Alt_L as u32,
+                x11_dl::keysym::XK_Left as u32,
+            ]);
+            return;
+        }
+        if keys == ["KEY_FORWARD"] {
+            if self.inject_key_by_keysym(x11_dl::keysym::XF86XK_Forward as u32) {
+                return;
+            }
+            self.inject_keysym_combo(&[
+                x11_dl::keysym::XK_Alt_L as u32,
+                x11_dl::keysym::XK_Right as u32,
+            ]);
+            return;
+        }
+
+        let mut keycodes: Vec<xproto::Keycode> = Vec::new();
+        for key in keys {
+            let Some(keysym) = linux_key_name_to_x11_keysym(key) else {
+                warn!("unknown key name in config (x11 backend): {key}");
+                continue;
+            };
+            let Some(keycode) = self.keysym_to_keycode.get(&keysym).copied() else {
+                warn!("no X11 keycode found for keysym=0x{keysym:x} (key={key})");
+                continue;
+            };
+            keycodes.push(keycode);
+        }
+
+        self.inject_keycode_combo(&keycodes);
+    }
+
+    fn inject_key_by_keysym(&mut self, keysym: xproto::Keysym) -> bool {
+        let Some(keycode) = self.keysym_to_keycode.get(&keysym).copied() else {
+            return false;
+        };
+        self.inject_keycode_combo(&[keycode]);
+        true
+    }
+
+    fn inject_keysym_combo(&mut self, keysyms: &[xproto::Keysym]) {
+        let mut keycodes: Vec<xproto::Keycode> = Vec::with_capacity(keysyms.len());
+        for &keysym in keysyms {
+            let Some(keycode) = self.keysym_to_keycode.get(&keysym).copied() else {
+                warn!("no X11 keycode found for keysym=0x{keysym:x}");
+                return;
+            };
+            keycodes.push(keycode);
+        }
+        self.inject_keycode_combo(&keycodes);
+    }
+
+    fn inject_keycode_combo(&mut self, keycodes: &[xproto::Keycode]) {
+        if keycodes.is_empty() {
+            return;
+        }
+
+        for &keycode in keycodes {
+            if let Err(err) =
+                self.conn
+                    .xtest_fake_input(xproto::KEY_PRESS_EVENT, keycode, 0, self.root, 0, 0, 0)
+            {
+                error!("xtest key press failed: {err}");
+                return;
+            }
+        }
+        if let Err(err) = self.conn.flush() {
+            error!("x11 flush failed: {err}");
+            return;
+        }
+
+        for &keycode in keycodes.iter().rev() {
+            if let Err(err) = self.conn.xtest_fake_input(
+                xproto::KEY_RELEASE_EVENT,
+                keycode,
+                0,
+                self.root,
+                0,
+                0,
+                0,
+            ) {
+                error!("xtest key release failed: {err}");
+                return;
+            }
+        }
+        if let Err(err) = self.conn.flush() {
+            error!("x11 flush failed: {err}");
+        }
+    }
+}
+
+fn build_x11_keysym_map(
+    conn: &x11rb::rust_connection::RustConnection,
+) -> Result<std::collections::HashMap<xproto::Keysym, xproto::Keycode>, AppError> {
+    let setup = conn.setup();
+    let min = setup.min_keycode;
+    let max = setup.max_keycode;
+    let count = max.saturating_sub(min).saturating_add(1);
+
+    let reply = conn.get_keyboard_mapping(min, count)?.reply()?;
+    let per = reply.keysyms_per_keycode as usize;
+    let mut map = std::collections::HashMap::new();
+
+    if per == 0 {
+        return Ok(map);
+    }
+
+    for (idx, chunk) in reply.keysyms.chunks(per).enumerate() {
+        let keycode = min.wrapping_add(idx as u8);
+        for &keysym in chunk {
+            if keysym != 0 {
+                map.entry(keysym).or_insert(keycode);
+            }
+        }
+    }
+
+    Ok(map)
+}
+
+fn linux_key_name_to_x11_keysym(key: &str) -> Option<xproto::Keysym> {
+    match key {
+        "KEY_VOLUMEUP" => Some(x11_dl::keysym::XF86XK_AudioRaiseVolume as u32),
+        "KEY_VOLUMEDOWN" => Some(x11_dl::keysym::XF86XK_AudioLowerVolume as u32),
+        "KEY_MUTE" => Some(x11_dl::keysym::XF86XK_AudioMute as u32),
+        "KEY_BACK" => Some(x11_dl::keysym::XF86XK_Back as u32),
+        "KEY_FORWARD" => Some(x11_dl::keysym::XF86XK_Forward as u32),
+        "KEY_LEFTALT" => Some(x11_dl::keysym::XK_Alt_L as u32),
+        "KEY_RIGHTALT" => Some(x11_dl::keysym::XK_Alt_R as u32),
+        "KEY_LEFTCTRL" => Some(x11_dl::keysym::XK_Control_L as u32),
+        "KEY_RIGHTCTRL" => Some(x11_dl::keysym::XK_Control_R as u32),
+        "KEY_LEFTSHIFT" => Some(x11_dl::keysym::XK_Shift_L as u32),
+        "KEY_RIGHTSHIFT" => Some(x11_dl::keysym::XK_Shift_R as u32),
+        "KEY_LEFTMETA" => Some(x11_dl::keysym::XK_Super_L as u32),
+        "KEY_RIGHTMETA" => Some(x11_dl::keysym::XK_Super_R as u32),
+        "KEY_LEFT" => Some(x11_dl::keysym::XK_Left as u32),
+        "KEY_RIGHT" => Some(x11_dl::keysym::XK_Right as u32),
+        _ => {
+            if let Some(letter) = key.strip_prefix("KEY_") {
+                if letter.len() == 1 {
+                    let c = letter.as_bytes()[0];
+                    if (b'A'..=b'Z').contains(&c) {
+                        let lower = (c + 32) as char;
+                        return Some(match lower {
+                            'a' => x11_dl::keysym::XK_a as u32,
+                            'b' => x11_dl::keysym::XK_b as u32,
+                            'c' => x11_dl::keysym::XK_c as u32,
+                            'd' => x11_dl::keysym::XK_d as u32,
+                            'e' => x11_dl::keysym::XK_e as u32,
+                            'f' => x11_dl::keysym::XK_f as u32,
+                            'g' => x11_dl::keysym::XK_g as u32,
+                            'h' => x11_dl::keysym::XK_h as u32,
+                            'i' => x11_dl::keysym::XK_i as u32,
+                            'j' => x11_dl::keysym::XK_j as u32,
+                            'k' => x11_dl::keysym::XK_k as u32,
+                            'l' => x11_dl::keysym::XK_l as u32,
+                            'm' => x11_dl::keysym::XK_m as u32,
+                            'n' => x11_dl::keysym::XK_n as u32,
+                            'o' => x11_dl::keysym::XK_o as u32,
+                            'p' => x11_dl::keysym::XK_p as u32,
+                            'q' => x11_dl::keysym::XK_q as u32,
+                            'r' => x11_dl::keysym::XK_r as u32,
+                            's' => x11_dl::keysym::XK_s as u32,
+                            't' => x11_dl::keysym::XK_t as u32,
+                            'u' => x11_dl::keysym::XK_u as u32,
+                            'v' => x11_dl::keysym::XK_v as u32,
+                            'w' => x11_dl::keysym::XK_w as u32,
+                            'x' => x11_dl::keysym::XK_x as u32,
+                            'y' => x11_dl::keysym::XK_y as u32,
+                            'z' => x11_dl::keysym::XK_z as u32,
+                            _ => return None,
+                        });
+                    }
+                }
+            }
+            None
+        }
+    }
 }
