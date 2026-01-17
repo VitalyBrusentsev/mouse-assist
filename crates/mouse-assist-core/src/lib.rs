@@ -83,6 +83,21 @@ pub enum MouseButton {
 }
 
 impl MouseButton {
+    pub fn toml_name(self) -> &'static str {
+        match self {
+            Self::BtnLeft => "BTN_LEFT",
+            Self::BtnRight => "BTN_RIGHT",
+            Self::BtnMiddle => "BTN_MIDDLE",
+            Self::BtnSide => "BTN_SIDE",
+            Self::BtnExtra => "BTN_EXTRA",
+            Self::BtnForward => "BTN_FORWARD",
+            Self::BtnBack => "BTN_BACK",
+            Self::BtnTask => "BTN_TASK",
+            Self::WheelTiltLeft => "WHEEL_TILT_LEFT",
+            Self::WheelTiltRight => "WHEEL_TILT_RIGHT",
+        }
+    }
+
     pub fn linux_key_code(self) -> Option<u16> {
         match self {
             Self::BtnLeft => Some(0x110),
@@ -137,30 +152,47 @@ pub fn save_config(path: &Path, config: &Config) -> Result<(), ConfigError> {
     Ok(())
 }
 
+pub fn binding_to_toml_string(binding: &Binding) -> Result<String, ConfigError> {
+    let mut out = String::new();
+
+    out.push_str("[[bindings]]\n");
+
+    let button = toml::Value::try_from(&binding.button)?;
+    out.push_str("button = ");
+    out.push_str(&button.to_string());
+    out.push('\n');
+
+    out.push_str("action = ");
+    out.push_str(&action_inline(&binding.action));
+    out.push('\n');
+
+    Ok(out)
+}
+
+fn toml_string(value: &str) -> String {
+    toml::Value::String(value.to_owned()).to_string()
+}
+
+fn toml_array_of_strings(values: &[String]) -> String {
+    toml::Value::Array(values.iter().cloned().map(toml::Value::String).collect()).to_string()
+}
+
+fn action_inline(action: &Action) -> String {
+    match action {
+        Action::Command { argv } => format!(
+            "{{ type = {}, argv = {} }}",
+            toml_string("command"),
+            toml_array_of_strings(argv)
+        ),
+        Action::KeyCombo { keys } => format!(
+            "{{ type = {}, keys = {} }}",
+            toml_string("key_combo"),
+            toml_array_of_strings(keys)
+        ),
+    }
+}
+
 fn config_to_toml_string(config: &Config) -> Result<String, ConfigError> {
-    fn toml_string(value: &str) -> String {
-        toml::Value::String(value.to_owned()).to_string()
-    }
-
-    fn toml_array_of_strings(values: &[String]) -> String {
-        toml::Value::Array(values.iter().cloned().map(toml::Value::String).collect()).to_string()
-    }
-
-    fn action_inline(action: &Action) -> String {
-        match action {
-            Action::Command { argv } => format!(
-                "{{ type = {}, argv = {} }}",
-                toml_string("command"),
-                toml_array_of_strings(argv)
-            ),
-            Action::KeyCombo { keys } => format!(
-                "{{ type = {}, keys = {} }}",
-                toml_string("key_combo"),
-                toml_array_of_strings(keys)
-            ),
-        }
-    }
-
     let mut out = String::new();
 
     if let Some(device_by_path) = &config.device_by_path {
@@ -174,16 +206,7 @@ fn config_to_toml_string(config: &Config) -> Result<String, ConfigError> {
         if idx != 0 {
             out.push('\n');
         }
-        out.push_str("[[bindings]]\n");
-
-        let button = toml::Value::try_from(&binding.button)?;
-        out.push_str("button = ");
-        out.push_str(&button.to_string());
-        out.push('\n');
-
-        out.push_str("action = ");
-        out.push_str(&action_inline(&binding.action));
-        out.push('\n');
+        out.push_str(&binding_to_toml_string(binding)?);
     }
 
     Ok(out)
@@ -199,6 +222,24 @@ mod tests {
         let raw = config_to_toml_string(&cfg).unwrap();
         let decoded: Config = toml::from_str(&raw).unwrap();
         assert_eq!(decoded, cfg);
+    }
+
+    #[test]
+    fn binding_snippet_round_trip_toml() {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            bindings: Vec<Binding>,
+        }
+
+        let binding = Binding {
+            button: MouseButton::BtnForward,
+            action: Action::KeyCombo {
+                keys: vec!["KEY_VOLUMEUP".into()],
+            },
+        };
+        let raw = binding_to_toml_string(&binding).unwrap();
+        let wrapper: Wrapper = toml::from_str(&raw).unwrap();
+        assert_eq!(wrapper.bindings, vec![binding]);
     }
 
     #[test]
