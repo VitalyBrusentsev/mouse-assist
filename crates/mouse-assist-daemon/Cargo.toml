@@ -1,0 +1,13 @@
+[package]
+name = "mouse-assist-daemon"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+evdev = "0.13"
+mouse-assist-core = { path = "../mouse-assist-core" }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+

@@ -1,0 +1,27 @@
+# Example configuration for mouse-assist.
+#
+# Copy to the default location printed by:
+#   mouse-assist-daemon config-path
+#
+# If `device_by_path` is unset, the daemon listens on all `/dev/input/event*` devices
+# that can emit any of the configured `button` codes.
+#
+# Note: `command.argv` is executed as-is; treat config as trusted input.
+
+# device_by_path = "/dev/input/by-id/usb-...-event-mouse"
+
+[[bindings]]
+button = "BTN_SIDE"
+action = { type = "key_combo", keys = ["KEY_BACK"] }
+
+[[bindings]]
+button = "BTN_EXTRA"
+action = { type = "key_combo", keys = ["KEY_FORWARD"] }
+
+[[bindings]]
+button = "BTN_FORWARD"
+action = { type = "key_combo", keys = ["KEY_VOLUMEUP"] }
+
+[[bindings]]
+button = "BTN_BACK"
+action = { type = "key_combo", keys = ["KEY_VOLUMEDOWN"] }

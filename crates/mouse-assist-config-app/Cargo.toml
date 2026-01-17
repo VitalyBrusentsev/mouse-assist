@@ -1,0 +1,9 @@
+[package]
+name = "mouse-assist-config-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.29"
+mouse-assist-core = { path = "../mouse-assist-core" }
+

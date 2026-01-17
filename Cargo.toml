@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/mouse-assist-core",
+  "crates/mouse-assist-daemon",
+  "crates/mouse-assist-config-app",
+]
+

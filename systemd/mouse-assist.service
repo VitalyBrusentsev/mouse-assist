@@ -1,0 +1,12 @@
+[Unit]
+Description=mouse-assist (mouse button remapper)
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/mouse-assist-daemon run
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+
